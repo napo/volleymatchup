@@ -7,9 +7,9 @@ document.addEventListener("DOMContentLoaded", function() {
     var esternoSize = sfondoSize * 0.8;
     var internoSize = esternoSize * 0.8;
     var colors = ["#FF6347", "#FFD700", "#ADFF2F", "#40E0D0", "#1E90FF", "#DA70D6"];
-    
-    // Inizializzazione delle rotazioni
-    var rotation = { esterno: 0, interno: 0 };
+
+    // Mantiene traccia delle rotazioni attuali per esterno e interno
+    var currentRotations = { esterno: 0, interno: 0 };
 
     function calculateHexagonPoints(center, size) {
         var points = [];
@@ -22,53 +22,58 @@ document.addEventListener("DOMContentLoaded", function() {
 
     function drawHexagon(name, points, colors, isClickable) {
         var hexGroup = s.group();
-        var rotationData = { angle: 0 }; // Angolo di rotazione per questo esagono
-
-        points.forEach((point, i) => {
-            let nextIndex = (i + 1) % points.length;
-            let color = name === "sfondo" ? "#FFFFFF" : colors[i % colors.length];
-            let spicchio = s.path(`M${center.x},${center.y} L${point.join(",")} L${points[nextIndex].join(",")} Z`)
-                            .attr({ fill: color, stroke: "#000", strokeWidth: 1 });
+        points.forEach((point, i, arr) => {
+            let nextIndex = (i + 1) % arr.length;
+            let spicchio = s.path(`M${center.x},${center.y} L${point.join(",")} L${arr[nextIndex].join(",")} Z`)
+                            .attr({ fill: name === "sfondo" ? "none" : colors[i % colors.length], stroke: "#000", strokeWidth: 1 });
             hexGroup.add(spicchio);
 
             if (name !== "sfondo") {
-                // Aggiunge linee tratteggiate per "interno" ed "esterno"
-                let midPoint = [(point[0] + points[nextIndex][0]) / 2, (point[1] + points[nextIndex][1]) / 2];
+                let midPoint = [(point[0] + arr[nextIndex][0]) / 2, (point[1] + arr[nextIndex][1]) / 2];
+                let lineLength = Math.sqrt(Math.pow(point[0] - arr[nextIndex][0], 2) + Math.pow(point[1] - arr[nextIndex][1], 2));
+                let textOffset = lineLength * 0.02; // Distanza del 2% dalla lunghezza del lato
+                let textPosition = calculateTextPosition(point, arr[nextIndex], textOffset);
+
                 hexGroup.add(s.line(center.x, center.y, midPoint[0], midPoint[1])
                              .attr({"stroke-dasharray": "5, 5", stroke: "#000", strokeWidth: 1 }));
+
+                // Aggiunge le etichette "B" e "R" all'interno degli spicchi
+                hexGroup.add(s.text(textPosition.B.x, textPosition.B.y, `B${i + 1}`)
+                             .attr({ fontSize: '16px', textAnchor: 'middle', fill: '#000' }));
+                hexGroup.add(s.text(textPosition.R.x, textPosition.R.y, `R${i + 1}`)
+                             .attr({ fontSize: '16px', textAnchor: 'middle', fill: '#000' }));
             }
         });
 
         if (isClickable) {
             hexGroup.click(function() {
-                rotationData.angle += 60; // Aggiorna l'angolo di rotazione
-                hexGroup.animate({ transform: `r${rotationData.angle},${center.x},${center.y}` }, 1000);
+                currentRotations[name] += 60; // Aggiorna la rotazione corrente
+                hexGroup.animate({ transform: `r${currentRotations[name]},${center.x},${center.y}` }, 1000);
             });
         }
-
-        // Memorizza l'oggetto di rotazione per consentire aggiornamenti futuri
-        rotation[name] = rotationData;
     }
 
-    function addNumberingToSfondo(points) {
-        points.forEach((point, i) => {
-            var nextIndex = (i + 1) % points.length;
-            var midPoint = [(point[0] + points[nextIndex][0]) / 2, (point[1] + points[nextIndex][1]) / 2];
-            // Posiziona la numerazione più vicino al bordo esterno
-            var labelPoint = [midPoint[0] * 0.95 + center.x * 0.05, midPoint[1] * 0.95 + center.y * 0.05];
-            s.text(labelPoint[0], labelPoint[1], `${i + 1}`)
-             .attr({fontSize: "16px", textAnchor: "middle", fill: "#000"});
-        });
+    function calculateTextPosition(startPoint, endPoint, offset) {
+        let midPoint = [(startPoint[0] + endPoint[0]) / 2, (startPoint[1] + endPoint[1]) / 2];
+        let angle = Math.atan2(endPoint[1] - startPoint[1], endPoint[0] - startPoint[0]);
+        let dx = Math.cos(angle) * offset;
+        let dy = Math.sin(angle) * offset;
+
+        // Calcola le posizioni di "B" e "R" mantenendole parallele al lato ma all'interno dello spicchio
+        let Bx = midPoint[0] - dy;
+        let By = midPoint[1] + dx;
+        let Rx = midPoint[0] + dy;
+        let Ry = midPoint[1] - dx;
+
+        return { B: { x: Bx, y: By }, R: { x: Rx, y: Ry } };
     }
 
     var sfondoPoints = calculateHexagonPoints(center, sfondoSize);
     var esternoPoints = calculateHexagonPoints(center, esternoSize);
     var internoPoints = calculateHexagonPoints(center, internoSize);
 
-    // Disegno degli esagoni con specifiche funzioni
-    drawHexagon("sfondo", sfondoPoints, [], false); // Sfondo con numerazione
-    drawHexagon("esterno", esternoPoints, colors, true); // Esterno colorato e cliccabile
-    drawHexagon("interno", internoPoints, colors, true); // Interno colorato e cliccabile
-    addNumberingToSfondo(sfondoPoints); // Aggiungi numerazione a "sfondo"
+    drawHexagon("sfondo", sfondoPoints, [], false); // Sfondo senza clic
+    drawHexagon("esterno", esternoPoints, colors, true); // Esterno cliccabile
+    drawHexagon("interno", internoPoints, colors, true); // Interno cliccabile
 });
 
