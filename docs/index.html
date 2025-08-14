@@ -1,27 +1,270 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="it">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Match Up</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/snap.svg/0.5.1/snap.svg-min.js"></script>
-    <style>
-        body, html {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-        }
-        #svg {
-            width: 100%;
-            height: 100%;
-        }
-    </style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VolleyMatchUp</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background:#fff; }
+    .stage { min-height:100vh; }
+    .svg-wrap { aspect-ratio:1/1; width:min(92vmin, 900px); }
+    svg { width:100%; height:100%; display:block; }
+
+    .hex-group {
+      transform-box: fill-box;
+      transform-origin: 50% 50%;
+      transition: transform 600ms ease-in-out;
+    }
+    #innerHex { cursor:pointer; } /* ruota solo l’interno */
+
+    .face { stroke:#212529; stroke-width:0.9; }
+    .hex-outline { fill:none; stroke:#212529; stroke-width:2; pointer-events:none; }
+
+    .bisector { stroke:#000; stroke-width:2; stroke-linecap:round; fill:none; pointer-events:none; }
+
+    text.label {
+      font:16px/1 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+      font-weight:700; fill:#212529;
+      pointer-events:none; user-select:none;
+    }
+    /* testi più piccoli SOLO per l'inner */
+    #innerHex text.label { font-size: 10px; }
+  </style>
 </head>
 <body>
-    <svg id="svg"></svg>
-    <script src="js/matchup.js">
-    </script>
+  <div class="container d-flex justify-content-center align-items-center stage">
+    <div class="svg-wrap">
+      <svg viewBox="-120 -120 240 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="tit desc">
+        <title id="tit">Due esagoni concentrici</title>
+        <desc id="desc">Outer fisso con BP/CP antiorario; inner ruota antiorario ma i numeri restano legati al colore (nessuno scorrimento), testi riorientati come l’outer.</desc>
+
+        <g id="outerHex" class="hex-group"></g>
+        <g id="innerHex" class="hex-group" data-rotation="0"></g>
+      </svg>
+    </div>
+  </div>
+
+  <script>
+  (() => {
+    const outer = document.getElementById('outerHex');
+    const inner = document.getElementById('innerHex');
+
+    const R = 105;       // raggio esagono esterno (perimetro outer)
+    const SCALE = 0.60;  // raggio esagono interno (bordo interno dell'anello outer)
+    const r = R * SCALE;
+
+    // Palette 1..6 (identica per outer e inner) – 1=giallo ecc.
+    const COLORS = ["#FFB703","#8ECAE6","#90BE6D","#F94144","#577590","#F3722C"];
+
+    // ---------- utilità ----------
+    const add = (a,b)=>({x:a.x+b.x,y:a.y+b.y});
+    const sub = (a,b)=>({x:a.x-b.x,y:a.y-b.y});
+    const mul = (a,k)=>({x:a.x*k,y:a.y*k});
+    const dot = (a,b)=>a.x*b.x+a.y*b.y;
+    const len = (a)=>Math.hypot(a.x,a.y);
+    const norm = (a)=>{const L=len(a)||1; return {x:a.x/L,y:a.y/L};};
+    const angDeg = (v)=>Math.atan2(v.y,v.x)*180/Math.PI;
+    const pathPolygon = (pts)=> pts.map(p=>`${p.x},${p.y}`).join(' ');
+
+    function vertices(radius){
+      const pts=[];
+      for(let i=0;i<6;i++){
+        const a=(Math.PI/180)*(60*i - 60); // flat-top (lato in basso orizzontale)
+        pts.push({x:radius*Math.cos(a), y:radius*Math.sin(a)});
+      }
+      return pts;
+    }
+
+    // lati ordinati: dal lato orizzontale in basso, in senso ORARIO
+    function edgesForCW(radius){
+      const vs = vertices(radius);
+      const edges=[];
+      for(let i=0;i<6;i++){
+        const j=(i+1)%6;
+        const v1=vs[i], v2=vs[j];
+        const m = mul(add(v1,v2), 0.5);
+        const base = sub(v2,v1);
+        const n0 = {x:-base.y, y: base.x};
+        const n  = (dot(n0, sub({x:0,y:0}, m))>0) ? norm(n0) : norm({x:base.y,y:-base.x});
+        const u  = norm(base);
+        const t1 = v1.x*u.x + v1.y*u.y, t2 = v2.x*u.x + v2.y*u.y;
+        const left  = (t1<=t2)? v1 : v2;
+        const right = (t1<=t2)? v2 : v1;
+        edges.push({i, v1, v2, left, right, mid:m, base, angle:angDeg(base), normal:n});
+      }
+      // scegli il lato orizzontale più in basso
+      let start=0, bestY=-1e9;
+      for(let k=0;k<6;k++){
+        const e=edges[k];
+        const a=((e.angle%360)+360)%360;
+        const horiz = (Math.abs(a-0)<1 || Math.abs(a-180)<1);
+        if(horiz && e.mid.y>bestY){ bestY=e.mid.y; start=k; }
+      }
+      const ordered=[];
+      for(let k=0;k<6;k++) ordered.push(edges[(start+k)%6]);
+      return ordered; // ordine ORARIO dal basso
+    }
+
+    // converte array CW in CCW partendo sempre dal basso
+    function toCCW(edgesCW){
+      const ccw=[];
+      for(let step=0; step<6; step++){
+        const k = (6 - step) % 6; // 0,5,4,3,2,1
+        ccw.push(edgesCW[k]);
+      }
+      return ccw;
+    }
+
+    // testo con auto-flip (come outer)
+    function orientedTextAngle(angle){
+      let a = ((angle % 360) + 360) % 360;
+      if (a > 90 && a < 270) a += 180;
+      return a;
+    }
+
+    function addText(parent, txt, pos, angle){
+      const a = orientedTextAngle(angle);
+      const t = document.createElementNS('http://www.w3.org/2000/svg','text');
+      t.setAttribute('class','label');
+      t.setAttribute('x', pos.x);
+      t.setAttribute('y', pos.y);
+      t.setAttribute('text-anchor','middle');
+      t.setAttribute('dominant-baseline','central');
+      t.setAttribute('transform', `rotate(${a} ${pos.x} ${pos.y})`);
+      t.textContent = txt;
+      parent.appendChild(t);
+      return t;
+    }
+
+    // ---- BUILD ----
+    function build(){
+      outer.innerHTML=''; inner.innerHTML='';
+
+      const eOuterCW = edgesForCW(R);
+      const eInnerCW = edgesForCW(r);
+      const eOuterCCW = toCCW(eOuterCW);
+      const eInnerCCW = toCCW(eInnerCW);
+
+      const offsetLabel = 9;
+
+      // --- OUTER (fisso): BP sinistra / CP destra, numerazione CCW fissa ---
+      for (let step = 0; step < 6; step++) {
+        const eo = eOuterCCW[step];
+        const ei = eInnerCCW[step];
+        const kCW = (6 - step) % 6; // per usare la stessa faccia/colore
+
+        // faccia (trapezio)
+        const poly = document.createElementNS('http://www.w3.org/2000/svg','polygon');
+        poly.setAttribute('points', pathPolygon([eo.v1, eo.v2, ei.v2, ei.v1]));
+        poly.setAttribute('class','face');
+        poly.setAttribute('fill', COLORS[kCW]);
+        outer.appendChild(poly);
+
+        // etichette sul perimetro esterno dell’outer (dentro)
+        const leftHalfMid  = mul(add(eo.left, eo.mid), 0.5);
+        const rightHalfMid = mul(add(eo.mid, eo.right), 0.5);
+        const inward       = mul(eo.normal, offsetLabel);
+        const angleBase    = eo.angle;
+
+        addText(outer, `BP${step+1}`, add(leftHalfMid, inward),  angleBase);
+        addText(outer, `CP${step+1}`, add(rightHalfMid, inward), angleBase);
+      }
+
+      // contorni + bisettrici
+      const outPoly = document.createElementNS('http://www.w3.org/2000/svg','polygon');
+      outPoly.setAttribute('points', pathPolygon(vertices(R)));
+      outPoly.setAttribute('class','hex-outline');
+      outer.appendChild(outPoly);
+
+      const inPoly = document.createElementNS('http://www.w3.org/2000/svg','polygon');
+      inPoly.setAttribute('points', pathPolygon(vertices(r)));
+      inPoly.setAttribute('class','hex-outline');
+      outer.appendChild(inPoly);
+
+      const bisGroup = document.createElementNS('http://www.w3.org/2000/svg','g');
+      outer.appendChild(bisGroup);
+      for (let step = 0; step < 6; step++) {
+        const eo = eOuterCCW[step], ei = eInnerCCW[step];
+        const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+        line.setAttribute('x1', ei.mid.x);
+        line.setAttribute('y1', ei.mid.y);
+        line.setAttribute('x2', eo.mid.x);
+        line.setAttribute('y2', eo.mid.y);
+        line.setAttribute('class', 'bisector');
+        bisGroup.appendChild(line);
+      }
+
+      // --- INNER (ruotabile): numeri FISSI per colore, CP sinistra / BP destra ---
+      inner.store = []; // salviamo info per r/orientamento
+      for (let step = 0; step < 6; step++) {
+        const ei = eInnerCCW[step];
+        const kCW = (6 - step) % 6; // stesso colore della faccia corrispondente
+        const mid_i = ei.mid;
+
+        // spicchio in due triangoli
+        const triL = document.createElementNS('http://www.w3.org/2000/svg','path');
+        triL.setAttribute('d', `M 0 0 L ${ei.v1.x} ${ei.v1.y} L ${mid_i.x} ${mid_i.y} Z`);
+        triL.setAttribute('class','face');
+        triL.setAttribute('fill', COLORS[kCW]);
+        inner.appendChild(triL);
+
+        const triR = document.createElementNS('http://www.w3.org/2000/svg','path');
+        triR.setAttribute('d', `M 0 0 L ${mid_i.x} ${mid_i.y} L ${ei.v2.x} ${ei.v2.y} Z`);
+        triR.setAttribute('class','face');
+        triR.setAttribute('fill', COLORS[kCW]);
+        inner.appendChild(triR);
+
+        // Etichette sull’inner: INVERTITE rispetto all’outer (CP sinistra, BP destra)
+        const leftHalfMid_i  = mul(add(ei.left, ei.mid), 0.5);
+        const rightHalfMid_i = mul(add(ei.mid,  ei.right), 0.5);
+        const inward_i       = mul(ei.normal, offsetLabel);
+        const angleBase_i    = ei.angle;
+
+        const tCPi = addText(inner, `CP${step+1}`, add(leftHalfMid_i,  inward_i), angleBase_i);
+        const tBPi = addText(inner, `BP${step+1}`, add(rightHalfMid_i, inward_i), angleBase_i);
+
+        inner.store.push({
+          baseAngle: angleBase_i, // per riorientare a ogni rotazione
+          BP: tBPi,               // a destra
+          CP: tCPi                // a sinistra
+        });
+      }
+
+      const innerOutline = document.createElementNS('http://www.w3.org/2000/svg','polygon');
+      innerOutline.setAttribute('points', pathPolygon(vertices(r)));
+      innerOutline.setAttribute('class','hex-outline');
+      inner.appendChild(innerOutline);
+
+      updateInnerTextOrientation();
+    }
+
+    function updateInnerTextOrientation(){
+      const currRot = parseFloat(inner.getAttribute('data-rotation')) || 0; // θ (deg)
+      for(const it of inner.store){
+        let world = ((it.baseAngle + currRot) % 360 + 360) % 360;
+        if (world > 90 && world < 270) world += 180;
+        const local = world - currRot; // trasformazione locale del <text> dentro il gruppo ruotato
+
+        for (const t of [it.BP, it.CP]) {
+          const x = t.getAttribute('x'), y = t.getAttribute('y');
+          t.setAttribute('transform', `rotate(${local} ${x} ${y})`);
+        }
+      }
+    }
+
+    function rotateInner(){
+      const currRot = parseFloat(inner.getAttribute('data-rotation')) || 0;
+      const nextRot = currRot - 60; // antiorario
+      inner.setAttribute('data-rotation', String(nextRot));
+      inner.style.transform = `rotate(${nextRot}deg)`;
+
+      updateInnerTextOrientation();
+    }
+
+    build();
+    inner.addEventListener('click', rotateInner);
+  })();
+  </script>
 </body>
 </html>
-
